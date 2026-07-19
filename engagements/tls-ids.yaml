@@ -1,0 +1,18 @@
+schema_version: "1.0"
+name: TLS Anomaly Detection IDS MVP
+repository:
+  url: https://github.com/TrangTuanAnh/tls-anomaly-detection-ids.git
+  commit: bc593b186b50f5c832a92f6ea1cbad88747d78ac
+focus:
+  - cross-service-trust
+  - hmac-state
+limits:
+  max_runtime_seconds: 1800
+  max_model_tokens: 32000
+  replay_count: 3
+models:
+  base_url: http://127.0.0.1:11434
+  hunter_model: qwen3-coder:30b
+  verifier_model: gpt-oss:20b
+  temperature: 0
+  timeout_seconds: 300

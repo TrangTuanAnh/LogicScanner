@@ -1,0 +1,27 @@
+schema_version: "1.0"
+target_name: tls-anomaly-detection-ids
+services:
+  - name: db
+    kind: database
+  - name: backend
+    kind: api
+    base_url: http://127.0.0.1:18000
+    health_path: /health
+  - name: python-realtime
+    kind: api
+    base_url: http://127.0.0.1:19000
+    health_path: /docs
+database:
+  engine: mysql
+  host: 127.0.0.1
+  port: 13306
+  database: tls_ids
+  user: tls_user
+  password_env: LOGICLAB_TARGET_DB_PASSWORD
+compose_file: docker-compose.sensor.yml
+compose_project: logiclab_tls_ids
+environment: {}
+reset_tables:
+  - firewall_actions
+  - flow_events
+  - request_nonces

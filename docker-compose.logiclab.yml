@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: logiclab
+      POSTGRES_USER: logiclab
+      POSTGRES_PASSWORD: logiclab
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - logiclab-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U logiclab -d logiclab"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  logiclab-postgres:
