@@ -1,61 +1,69 @@
 # LogicLab Universal
 
-LogicLab is a local-first forensic workbench for understanding an unfamiliar Git
-repository before any target code is allowed to run. A pinned commit is fetched
-as immutable Git objects, materialized without checkout hooks or symlinks,
-normalized into a repository IR, and processed by an eight-role analysis graph.
-The React UI exposes capability scores, components, diagnostics, tasks, claims,
-and source provenance.
+LogicLab là một workbench pháp chứng chạy cục bộ, dùng để **hiểu** một Git
+repository lạ trước khi cho phép bất kỳ dòng code nào của nó được chạy. Một
+commit được ghim sẽ được tải về dưới dạng Git object bất biến, materialize mà
+không qua checkout hook hay symlink, chuẩn hoá thành IR của repository, rồi được
+xử lý bởi một đồ thị phân tích tám vai trò. Giao diện React hiển thị điểm năng
+lực, thành phần, chẩn đoán, tác vụ, claim và nguồn gốc mã nguồn.
 
-## What works now
+## Hiện đã chạy được
 
-- Static intake for credential-free HTTPS repositories on GitHub, GitLab,
-  Bitbucket, and Codeberg, pinned to an exact 40-character commit SHA.
-- Stack and build discovery for Python, Java/JVM, JavaScript/TypeScript, Go,
-  Rust, .NET, Ruby, PHP, Elixir, Dart, Bazel, CMake, Make, and Nix projects.
-- Python AST extraction plus conservative multi-language symbol, import,
-  endpoint, manifest, component, and test-path discovery.
-- A deterministic role DAG: research director, repo surveyor, architecture
+- Tiếp nhận tĩnh cho repository HTTPS không kèm credential trên GitHub, GitLab,
+  Bitbucket và Codeberg, ghim theo đúng commit SHA 40 ký tự.
+- Nhận diện stack và hệ thống build cho Python, Java/JVM, JavaScript/TypeScript,
+  Go, Rust, .NET, Ruby, PHP, Elixir, Dart, Bazel, CMake, Make và Nix.
+- Trích xuất AST cho Python, cộng với việc phát hiện thận trọng theo nhiều ngôn
+  ngữ các symbol, import, endpoint, manifest, component và đường dẫn test.
+- Một DAG vai trò tất định: research director, repo surveyor, architecture
   mapper, build/runtime scout, test-path analyst, security/domain mapper,
-  Project Twin synthesizer, and independent skeptic. Each producing role emits
-  its own cited claims under its own provenance, or abstains with a typed reason
-  when the evidence is not there.
-- Enforced budgets (`StopRules` over accumulated `BudgetUsage`), enforced role
-  `max_parallelism`, and deterministic conflict adjudication that refuses to
-  break a tie the evidence does not break.
-- An optional, default-off local-model proposer for semantic claims that static
-  parsing cannot establish. Every proposal must cite an allow-listed
-  materialized path and is admitted only as `INFERRED`.
-- Typed claims with immutable commit, tree digest, blob SHA-256, line span,
-  producer, and tool provenance.
-- Same-origin React UI with HttpOnly-cookie session exchange, responsive routes,
-  accessible forms, readable API failures, and job polling.
-- Versioned Alembic migrations and a wheel containing both UI assets and
-  migrations.
+  Project Twin synthesizer và independent skeptic. Mỗi vai trò sản xuất đều phát
+  ra claim có trích dẫn dưới provenance của chính nó, hoặc **abstain** kèm lý do
+  có kiểu khi bằng chứng không tồn tại.
+- Budget được thực thi (`StopRules` trên `BudgetUsage` tích luỹ), `max_parallelism`
+  theo vai trò được thực thi, và phân xử xung đột tất định — từ chối bẻ một thế
+  hoà mà bằng chứng không bẻ được.
+- Mọi kết quả không thành công đều kèm bước tiếp theo: abstain, trần năng lực,
+  role crash, và task bị scheduler chặn đều nói rõ điều gì sẽ gỡ được bế tắc.
+- Recovery khép kín: một role crash trở thành `ERROR` có kiểu kèm recovery
+  contract thay vì giết cả phiên phân tích; `TaskDAG.retry_task` đưa nó về hàng
+  đợi, và `StopRules` cho nó fail khi hết ngân sách retry. Các vai trò còn lại
+  vẫn tiếp tục đóng góp claim.
+- Một proposer dùng model cục bộ, **mặc định tắt**, cho các claim ngữ nghĩa mà
+  phân tích tĩnh không thể xác lập. Mọi đề xuất bắt buộc phải trích dẫn một
+  đường dẫn nằm trong allow-list đã được materialize, và chỉ được nhận với trạng
+  thái `INFERRED`.
+- Claim có kiểu, kèm commit bất biến, tree digest, blob SHA-256, khoảng dòng,
+  bên sản xuất và provenance của công cụ.
+- Giao diện React same-origin với phiên trao đổi qua cookie HttpOnly, route
+  responsive, form accessible, lỗi API đọc được và cơ chế poll job.
+- Alembic migration có phiên bản, và một wheel đóng gói cả UI asset lẫn migration.
 
-Understanding (`U0`–`U4`) and runtime readiness (`R0`–`R4`) are deliberately
-independent. Universal analysis currently remains static (`R0`/`R1`). The role
-graph is deterministic by default and makes no claim to independent runtime
-verification. Semantic review exists only through the opt-in proposer, whose
-output is always marked `INFERRED` and never treated as observation.
+Mức độ hiểu (`U0`–`U4`) và mức độ sẵn sàng runtime (`R0`–`R4`) là hai trục **cố ý
+tách rời**. Phân tích universal hiện vẫn hoàn toàn tĩnh (`R0`/`R1`). Đồ thị vai
+trò mặc định là tất định và không tuyên bố có kiểm chứng runtime độc lập. Đánh
+giá ngữ nghĩa chỉ tồn tại qua proposer tuỳ chọn, và đầu ra của nó luôn được đánh
+dấu `INFERRED`, không bao giờ được coi là quan sát thực tế.
 
-## Safety boundary
+## Ranh giới an toàn
 
-Universal repository submission never runs repository code. Git transfer occurs
-in a prompt-free subprocess with an allowlisted forge, public-DNS check,
-redirect denial, a pinned shallow fetch, wall-time limit, disk quota, and partial
-snapshot cleanup. Materialization skips symlinks, non-regular files, sensitive
-paths, binaries, oversized files, unsafe paths, and case collisions. Every
-omission lowers coverage and produces `needs_review` rather than a false 100%.
+Việc nộp repository theo luồng universal **không bao giờ chạy code của
+repository đó**. Quá trình truyền Git diễn ra trong một subprocess không prompt,
+với forge nằm trong allowlist, kiểm tra DNS công khai, từ chối redirect, fetch
+nông theo commit ghim, giới hạn thời gian, hạn ngạch dung lượng đĩa, và dọn dẹp
+snapshot dở dang. Bước materialize bỏ qua symlink, file không phải file thường,
+đường dẫn nhạy cảm, file nhị phân, file quá lớn, đường dẫn không an toàn và các
+trường hợp trùng tên do phân biệt hoa thường. **Mọi phần bị bỏ qua đều làm giảm
+coverage và đẩy trạng thái về `needs_review`, thay vì báo 100% giả.**
 
-The earlier TLS experiment engine remains in the codebase for compatibility, but
-its API mutations and background worker are disabled by default. Enabling
-`LOGICLAB_LEGACY_RUNTIME_ENABLED=true` is an explicit opt-in and is not part of
-the universal static workflow.
+Engine thí nghiệm TLS trước đây vẫn còn trong codebase để tương thích ngược,
+nhưng các thao tác ghi qua API và worker nền của nó bị tắt mặc định. Bật
+`LOGICLAB_LEGACY_RUNTIME_ENABLED=true` là một lựa chọn tường minh và **không**
+thuộc quy trình tĩnh universal.
 
-## Quick start on Windows
+## Khởi động nhanh trên Windows
 
-Requirements: Python 3.12, Git, and Node.js 20+.
+Yêu cầu: Python 3.12, Git và Node.js 20+.
 
 ```powershell
 py -3.12 -m venv .venv
@@ -66,30 +74,30 @@ Copy-Item .env.logiclab.example .env.logiclab
 .\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-Put the generated value in `LOGICLAB_API_TOKEN` inside `.env.logiclab`, then:
+Đặt giá trị vừa sinh vào `LOGICLAB_API_TOKEN` trong `.env.logiclab`, sau đó:
 
 ```powershell
 .\.venv\Scripts\logiclab.exe serve
 ```
 
-Open `http://127.0.0.1:8088`, choose **Unlock API**, and submit a public Git URL
-with its exact commit SHA. The app applies Alembic migrations automatically.
-SQLite is configured in the example file; for PostgreSQL, replace
-`LOGICLAB_DATABASE_URL` or start the included control database:
+Mở `http://127.0.0.1:8088`, chọn **Unlock API**, rồi nộp một URL Git công khai
+kèm đúng commit SHA của nó. Ứng dụng tự áp dụng Alembic migration. File ví dụ
+cấu hình sẵn SQLite; nếu muốn dùng PostgreSQL, hãy thay `LOGICLAB_DATABASE_URL`
+hoặc khởi động control database đi kèm:
 
 ```powershell
 docker compose -f docker-compose.logiclab.yml up -d
 ```
 
-Repository analysis is persisted before work begins and the HTTP endpoint returns
-`202`. The server starts the bounded job in the background. If the process stops
-before a queued job starts, resume it with:
+Phiên phân tích repository được lưu bền vững trước khi công việc bắt đầu, và
+endpoint HTTP trả về `202`. Server sẽ chạy job có giới hạn ở nền. Nếu tiến trình
+dừng trước khi một job trong hàng đợi kịp chạy, hãy tiếp tục nó bằng:
 
 ```powershell
 .\.venv\Scripts\logiclab.exe analysis-worker
 ```
 
-## Verification
+## Kiểm chứng
 
 ```powershell
 .\.venv\Scripts\python.exe -m ruff check src tests migrations
@@ -98,15 +106,33 @@ npm --prefix ui test -- --run
 npm --prefix ui run build
 ```
 
-The main API routes are under `/v1/repository-analyses`; `/health` is public and
-all `/v1` data routes require the configured bearer token or the exchanged
-HttpOnly session cookie.
+Các route API chính nằm dưới `/v1/repository-analyses`; `/health` là public, còn
+mọi route dữ liệu `/v1` đều yêu cầu bearer token đã cấu hình hoặc cookie phiên
+HttpOnly đã trao đổi.
 
-## Current limits
+## Giới hạn hiện tại
 
-“Universal” means repository and stack independent, not unlimited or unsafe.
-Private repositories, arbitrary forge hosts, repositories exceeding configured
-transfer/snapshot budgets, full semantic resolution for every language, and
-dynamic execution of arbitrary build files are intentionally unsupported in this
-release. Unsupported areas remain visible in diagnostics and coverage instead of
-being guessed.
+“Universal” nghĩa là **độc lập với repository và stack**, chứ không phải không
+giới hạn hay không an toàn. Những điều sau đây cố ý chưa được hỗ trợ trong bản
+này:
+
+- Repository riêng tư và các forge host tuỳ ý.
+- Repository vượt quá ngân sách truyền tải hoặc snapshot đã cấu hình.
+- Phân giải ngữ nghĩa đầy đủ cho mọi ngôn ngữ.
+- Thực thi động các file build tuỳ ý.
+
+Quan trọng hơn, cần nói rõ hệ thống này **hiện chưa làm** ba việc mà tên gọi dễ
+gây hiểu nhầm:
+
+1. **Chưa tự dựng lab cho repository tuỳ ý.** Docker lab và orchestrator chỉ
+   phục vụ một mục tiêu TLS đã được biên soạn sẵn, và nằm sau cờ legacy đang
+   tắt. Luồng universal không dựng môi trường chạy cho repository bạn nộp vào.
+2. **Chưa phát hiện lỗ hổng.** Nó sinh ra *claim mô tả* — thành phần, symbol,
+   endpoint, hệ thống build, đường dẫn test, mức năng lực — chứ không phải
+   *phát hiện bảo mật*. Vai trò `security_domain_mapper` lập bản đồ các entry
+   point; nó không phán xét entry point đó có lỗ hổng hay không.
+3. **Các "vai trò" không phải agent theo nghĩa LLM.** Chúng là hàm Python tất
+   định. Thành phần LLM duy nhất là proposer tuỳ chọn, mặc định tắt.
+
+Những vùng chưa hỗ trợ luôn hiện diện trong diagnostics và coverage, thay vì bị
+đoán bừa.
