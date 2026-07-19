@@ -369,11 +369,13 @@ class AgentResultStatus(StrEnum):
     ERROR = "ERROR"
 
 
-class AgentError(HarnessModel):
-    code: str = Field(min_length=1, max_length=128)
-    root_cause_hint: str = Field(min_length=1, max_length=1_000)
-    safe_retry_instruction: str = Field(min_length=1, max_length=1_000)
-    stop_condition: str = Field(min_length=1, max_length=1_000)
+class AgentError(ToolError):
+    """A role-level failure. Structurally identical to :class:`ToolError`.
+
+    Both names are kept because the producers differ — one is raised by a tool
+    call, the other by a whole role — but the recovery contract is one concept
+    and inheriting it here means the two can never silently drift apart.
+    """
 
 
 class BudgetUsage(HarnessModel):
@@ -908,6 +910,24 @@ class TaskDAG:
             # without this the MAX_RETRIES gate could never fire.
             self.record_usage(task_id, BudgetUsage(retries=1))
         return transitioned
+
+    def retry_task(self, task_id: str) -> TaskRecord:
+        """Return a RETRYABLE task to the ready pool, or fail it once a stop rule fires.
+
+        Without this, ERROR is a silent dead end: ``_refresh_dependencies`` only
+        promotes PENDING tasks, so a RETRYABLE task would never be scheduled
+        again and ``max_retries`` could never be reached. This is the explicit
+        stop condition that closes the recovery contract.
+        """
+
+        record = self._get(task_id)
+        if record.status is not TaskStatus.RETRYABLE:
+            raise InvalidTaskTransition(
+                f"only a RETRYABLE task can be retried, not {record.status}"
+            )
+        if self.assess_stop(task_id).stop:
+            return self.transition(task_id, TaskStatus.FAILED)
+        return self.transition(task_id, TaskStatus.READY)
 
     def _get(self, task_id: str) -> TaskRecord:
         try:

@@ -22,6 +22,7 @@ distinction stays visible in the output as an epistemic status.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -78,17 +79,32 @@ class ProposalSet(BaseModel):
     )
 
 
+#: Characters per token. A coarse, documented approximation — the point is that
+#: the context budget is measured against the real payload rather than assumed.
+_CHARS_PER_TOKEN = 4
+
+
+def estimate_tokens(payload: object) -> int:
+    """Approximate the token cost of what is actually sent to the model."""
+
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return max(1, len(serialized) // _CHARS_PER_TOKEN)
+
+
 @dataclass(frozen=True)
 class ProposerPolicy:
     """Hard caps applied before and after the model is consulted."""
 
     max_proposals: int = 25
     max_evidence_paths: int = 200
+    #: Mirrors ContextRequest.max_context_tokens: the evidence list is trimmed
+    #: until the real payload fits, so the declared budget governs behaviour.
+    max_context_tokens: int = 12_000
     #: Rejected proposals are counted, never repaired.
     reject_uncitable: bool = True
 
     def __post_init__(self) -> None:
-        if self.max_proposals < 1 or self.max_evidence_paths < 1:
+        if min(self.max_proposals, self.max_evidence_paths, self.max_context_tokens) < 1:
             raise ValueError("proposer policy limits must be positive")
 
 
@@ -132,19 +148,44 @@ class ClaimProposer:
         if not allowed_paths:
             return ProposalOutcome(claims=(), rejected=(), usage=BudgetUsage())
 
+        def build(paths: list[str]) -> dict[str, object]:
+            return {
+                "task": "propose semantic claims that static parsing cannot establish",
+                "allowed_kinds": sorted(_ALLOWED_KINDS),
+                "allowed_paths": paths,
+                "max_proposals": self.policy.max_proposals,
+                "repository": self.redactor.redact(report.repository_name),
+            }
+
+        # Trim the evidence list until the payload actually fits the budget,
+        # rather than declaring a budget and sending whatever we like.
+        trimmed = list(allowed_paths)
+        dropped = 0
+        while len(trimmed) > 1 and estimate_tokens(build(trimmed)) > self.policy.max_context_tokens:
+            trimmed.pop()
+            dropped += 1
+        payload = build(trimmed)
+        context_tokens = estimate_tokens(payload)
+
         result = self.client.structured_chat(
             model=self.model,
             system=self.system_prompt,
-            user={
-                "task": "propose semantic claims that static parsing cannot establish",
-                "allowed_kinds": sorted(_ALLOWED_KINDS),
-                "allowed_paths": allowed_paths,
-                "max_proposals": self.policy.max_proposals,
-                "repository": self.redactor.redact(report.repository_name),
-            },
+            user=payload,
             response_model=ProposalSet,
         )
-        return self._admit(role, index, result, frozenset(allowed_paths))
+        outcome = self._admit(role, index, result, frozenset(trimmed))
+        notes = list(outcome.rejected)
+        if dropped:
+            notes.append(
+                f"context budget trimmed {dropped} evidence paths from the proposer prompt"
+            )
+        return ProposalOutcome(
+            claims=outcome.claims,
+            rejected=tuple(notes),
+            usage=BudgetUsage(
+                tool_calls=1, probe_rounds=1, context_tokens=context_tokens
+            ),
+        )
 
     def _allowed_paths(
         self, index: EvidenceIndex, report: RepositoryIntelligenceReport

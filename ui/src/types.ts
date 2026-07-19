@@ -39,6 +39,8 @@ export interface AgentTask {
   status: "pending" | "running" | "complete" | "blocked" | string;
   depends_on: string[];
   output?: string;
+  /** What would unblock this task when it abstained, degraded, or failed. */
+  next_actions: string[];
   duration_ms?: number;
 }
 

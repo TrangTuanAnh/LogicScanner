@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from logiclab.harness import (
+    AgentError,
     AgentResult,
     AgentResultStatus,
     AgentRole,
@@ -89,6 +90,9 @@ class AgentTaskView(AnalysisModel):
     status: str
     depends_on: list[str] = Field(default_factory=list)
     output: str | None = None
+    #: What would unblock this task. A non-success outcome that does not say
+    #: what to do next is a dead end for whoever reads the report.
+    next_actions: list[str] = Field(default_factory=list)
     duration_ms: int | None = None
 
 
@@ -424,7 +428,9 @@ class RepositoryAnalysisManager:
                 snapshot_digest=snapshot.tree_digest,
             )
             report = _merge_snapshot_diagnostics(analyze_repository(snapshot.root), snapshot)
-            outcome = _run_agent_team(analysis, snapshot, report, proposer=self.proposer)
+            outcome = _run_agent_team(
+                analysis, snapshot, report, proposer=self.proposer, redactor=self.redactor
+            )
             report = _merge_uncitable_evidence(report, outcome)
             terminal = (
                 RepositoryAnalysisStatus.READY
@@ -631,6 +637,34 @@ class AgentTeamOutcome:
 PROPOSING_ROLES = frozenset({AgentRole.SECURITY_DOMAIN_MAPPER, AgentRole.TWIN_SYNTHESIZER})
 
 
+def _role_error_result(spec: TaskSpec, error: Exception, redactor: Redactor) -> AgentResult:
+    """Turn a role crash into a typed result carrying a full recovery contract."""
+
+    detail = str(redactor.redact(str(error)))[:400] or error.__class__.__name__
+    return AgentResult(
+        task_id=spec.task_id,
+        role=spec.role,
+        status=AgentResultStatus.ERROR,
+        summary=f"{spec.role.value} failed: {detail}",
+        error=AgentError(
+            code=f"ROLE_EXECUTION_FAILED:{error.__class__.__name__}",
+            root_cause_hint=detail,
+            safe_retry_instruction=(
+                "Re-run this role against the same pinned snapshot; the snapshot "
+                "is immutable, so a retry reads exactly the same evidence."
+            ),
+            stop_condition=(
+                f"Stop after {spec.budget.max_retries} attempts and report the role "
+                "as failed rather than degrading other roles."
+            ),
+        ),
+        next_actions=(
+            f"inspect the {spec.role.value} producer for this repository shape",
+            "treat downstream claims as incomplete until this role succeeds",
+        ),
+    )
+
+
 def _remaining_disputes(
     board: Blackboard,
     view: BlackboardView,
@@ -709,14 +743,17 @@ def _extend_with_proposals(
         "includes inferred claims that are not reproducible across runs",
         *result.missing_information,
     )
+    # Copy rather than rebuild: constructing a fresh AgentResult silently drops
+    # every field not listed, which previously discarded the role's own
+    # next_actions for exactly the two roles a proposer touches.
     return (
-        AgentResult(
-            task_id=result.task_id,
-            role=result.role,
-            status=AgentResultStatus.PARTIAL,
-            summary=f"{result.summary} (+{len(outcome.claims)} inferred)",
-            claims=merged,
-            missing_information=missing,
+        result.model_copy(
+            update={
+                "status": AgentResultStatus.PARTIAL,
+                "summary": f"{result.summary} (+{len(outcome.claims)} inferred)",
+                "claims": merged,
+                "missing_information": missing,
+            }
         ),
         notes,
     )
@@ -727,7 +764,9 @@ def _run_agent_team(
     snapshot: SnapshotResult,
     report: RepositoryIntelligenceReport,
     proposer: "ClaimProposer | None" = None,
+    redactor: Redactor | None = None,
 ) -> AgentTeamOutcome:
+    redactor = redactor or Redactor()
     snapshot_id = snapshot.tree_digest
     index = EvidenceIndex(
         snapshot_id=snapshot_id,
@@ -798,29 +837,40 @@ def _run_agent_team(
     )
     dag = TaskDAG(specs)
     summaries: dict[str, str] = {}
+    next_actions: dict[str, tuple[str, ...]] = {}
     board = Blackboard()
     adjudication: Adjudication | None = None
     stop_reasons: set[str] = set()
     proposal_notes: list[str] = []
 
     while (spec := dag.claim_next()) is not None:
-        if spec.role is AgentRole.INDEPENDENT_SKEPTIC:
-            # The skeptic can only adjudicate once every producing role has
-            # appended its claims, which the DAG guarantees by dependency order.
-            adjudication = adjudicate(board)
-            result = skeptic_result(spec.task_id, adjudication)
-        else:
-            result = execute_role(spec.role, spec.task_id, index, report)
-            if proposer is not None and spec.role in PROPOSING_ROLES:
-                result, notes = _extend_with_proposals(
-                    proposer, spec.role, result, index, report, dag
-                )
-                proposal_notes.extend(notes)
-            if result.claims:
-                board.append_claim_batch(result.claims)
+        try:
+            if spec.role is AgentRole.INDEPENDENT_SKEPTIC:
+                # The skeptic can only adjudicate once every producing role has
+                # appended its claims, which the DAG guarantees by dependency order.
+                adjudication = adjudicate(board)
+                result = skeptic_result(spec.task_id, adjudication)
+            else:
+                result = execute_role(spec.role, spec.task_id, index, report)
+                if proposer is not None and spec.role in PROPOSING_ROLES:
+                    result, notes = _extend_with_proposals(
+                        proposer, spec.role, result, index, report, dag
+                    )
+                    proposal_notes.extend(notes)
+                if result.claims:
+                    board.append_claim_batch(result.claims)
+        except Exception as exc:
+            # One role failing is not the whole analysis failing. Convert it to
+            # a typed ERROR carrying a recovery contract; the DAG then either
+            # retries it or fails it once the retry budget is spent, and every
+            # other role still contributes its claims.
+            result = _role_error_result(spec, exc, redactor)
 
         summaries[spec.task_id] = result.summary
+        next_actions[spec.task_id] = result.next_actions
         dag.complete_task(spec.task_id, result)
+        if dag.status(spec.task_id) is TaskStatus.RETRYABLE:
+            dag.retry_task(spec.task_id)
 
         # The budget gates are advisory for a static run: nothing here consumes
         # tokens or wall time. Recording the assessment still makes an exhausted
@@ -844,17 +894,45 @@ def _run_agent_team(
         TaskStatus.READY: "pending",
         TaskStatus.RUNNING: "running",
     }
-    tasks = [
-        AgentTaskView(
-            id=spec.task_id,
-            title=spec.kind.value.replace("_", " ").title(),
-            agent=spec.role.value,
-            status=status_map[dag.status(spec.task_id)],
-            depends_on=list(spec.depends_on),
-            output=summaries.get(spec.task_id),
+    def _blocked_explanation(spec: TaskSpec) -> tuple[str, list[str]]:
+        """Name the upstream that stopped this task, since it never ran itself.
+
+        A BLOCKED task is produced by the scheduler, not by a role, so it has no
+        result of its own. Without this it would render as a dead row with no
+        output and no next step — the exact dead end this harness avoids
+        everywhere else.
+        """
+
+        culprits = [
+            item
+            for item in spec.depends_on
+            if dag.status(item)
+            in {TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED}
+        ]
+        blame = ", ".join(sorted(culprits)) or "an upstream task"
+        return (
+            f"Not run: blocked by {blame}",
+            [f"resolve {blame} first, then re-run this analysis"],
         )
-        for spec in specs
-    ]
+
+    tasks = []
+    for spec in specs:
+        status = dag.status(spec.task_id)
+        output = summaries.get(spec.task_id)
+        actions = list(next_actions.get(spec.task_id, ()))
+        if output is None and status is TaskStatus.BLOCKED:
+            output, actions = _blocked_explanation(spec)
+        tasks.append(
+            AgentTaskView(
+                id=spec.task_id,
+                title=spec.kind.value.replace("_", " ").title(),
+                agent=spec.role.value,
+                status=status_map[status],
+                depends_on=list(spec.depends_on),
+                output=output,
+                next_actions=actions,
+            )
+        )
 
     view = board.reduce()
     rejected = set(adjudication.rejected_claim_ids)

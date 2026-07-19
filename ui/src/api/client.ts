@@ -222,6 +222,7 @@ export function normalizeAnalysis(value: unknown): RepositoryAnalysis {
       status: String(item.status ?? "pending").toLowerCase(),
       depends_on: list<unknown>(item.depends_on).map(String),
       output: item.output ? String(item.output) : undefined,
+      next_actions: list<unknown>(item.next_actions).map(String),
       duration_ms: typeof item.duration_ms === "number" ? item.duration_ms : undefined,
     })),
     claims: claims.map((item, index) => ({

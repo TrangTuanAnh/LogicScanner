@@ -571,3 +571,74 @@ def test_aggregate_usage_sums_across_distinct_tasks() -> None:
 
     assert dag.usage_for("T-1").tool_calls == 3
     assert dag.aggregate_usage().tool_calls == 7
+
+
+def test_agent_error_and_tool_error_share_one_recovery_contract() -> None:
+    assert issubclass(AgentError, ToolError)
+    assert set(AgentError.model_fields) == set(ToolError.model_fields)
+
+
+def _errored_dag(max_retries: int = 2) -> TaskDAG:
+    spec = TaskSpec(
+        task_id="T-1",
+        engagement_id="ENG-1",
+        snapshot_id="SNAP-1",
+        kind=TaskKind.MAP_ARCHITECTURE,
+        role=AgentRole.ARCHITECTURE_MAPPER,
+        budget=TaskBudget(max_retries=max_retries),
+    )
+    return TaskDAG((spec,))
+
+
+def _fail_once(dag: TaskDAG) -> None:
+    dag.claim_next()
+    dag.complete_task(
+        "T-1",
+        AgentResult(
+            task_id="T-1",
+            role=AgentRole.ARCHITECTURE_MAPPER,
+            status=AgentResultStatus.ERROR,
+            summary="boom",
+            error=AgentError(
+                code="E", root_cause_hint="h", safe_retry_instruction="r", stop_condition="s"
+            ),
+        ),
+    )
+
+
+def test_a_retryable_task_returns_to_the_ready_pool() -> None:
+    """Without a retry driver an ERROR task is a permanent dead end."""
+
+    dag = _errored_dag()
+    _fail_once(dag)
+    assert dag.status("T-1") is TaskStatus.RETRYABLE
+    # _refresh_dependencies only promotes PENDING, so nothing else can rescue it.
+    assert dag.ready_tasks() == ()
+
+    dag.retry_task("T-1")
+
+    assert dag.status("T-1") is TaskStatus.READY
+    assert dag.claim_next() is not None
+
+
+def test_retrying_past_the_budget_fails_the_task_instead_of_looping() -> None:
+    dag = _errored_dag(max_retries=2)
+
+    _fail_once(dag)
+    dag.retry_task("T-1")
+    _fail_once(dag)
+
+    assert dag.usage_for("T-1").retries == 2
+    assert StopReason.MAX_RETRIES in dag.assess_stop("T-1").reasons
+
+    dag.retry_task("T-1")
+
+    assert dag.status("T-1") is TaskStatus.FAILED
+
+
+def test_only_a_retryable_task_can_be_retried() -> None:
+    dag = _errored_dag()
+    dag.claim_next()
+
+    with pytest.raises(InvalidTaskTransition, match="only a RETRYABLE task"):
+        dag.retry_task("T-1")

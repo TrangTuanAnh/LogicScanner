@@ -23,6 +23,7 @@ from logiclab.intelligence import (
     UnderstandingLevel,
 )
 from logiclab.roles import (
+    ROLE_PRODUCERS,
     EvidenceIndex,
     adjudicate,
     execute_role,
@@ -462,3 +463,185 @@ def test_an_unresolved_tie_stays_reported_as_disputed() -> None:
     assert remaining(board, view, adjudicate(board)) == sorted(
         [first.claim_id, second.claim_id]
     )
+
+
+def test_an_abstaining_role_always_says_what_would_unblock_it() -> None:
+    """An outcome with no next step is a dead end for whoever reads the report."""
+
+    empty = make_report(with_component=False, with_symbol=False, with_test=False)
+    # Every producing role, including the security mapper the proposer touches.
+    for role in ROLE_PRODUCERS:
+        result = execute_role(role, "t", make_index(), empty)
+        assert result.status is AgentResultStatus.ABSTAIN
+        assert result.next_actions, f"{role.value} abstained with no next action"
+
+
+@pytest.mark.parametrize(
+    ("role", "expected"),
+    [
+        (AgentRole.BUILD_RUNTIME_SCOUT, "sandbox manifest"),
+        (AgentRole.SECURITY_DOMAIN_MAPPER, "framework adapters"),
+        (AgentRole.TWIN_SYNTHESIZER, "understanding U4"),
+    ],
+)
+def test_every_capability_limited_role_says_how_to_raise_the_ceiling(
+    role: AgentRole, expected: str
+) -> None:
+    # U2 is the highest level the analyzer actually assigns, so all three
+    # ceilings genuinely fire on a real report.
+    result = execute_role(role, "t", make_index(), make_report(with_endpoint=True))
+
+    assert result.status is AgentResultStatus.PARTIAL
+    assert any(expected in item for item in result.next_actions)
+
+
+def test_a_skeptic_that_cannot_break_a_tie_says_what_to_do_about_it() -> None:
+    board, _, _ = _conflicting_pair(EpistemicStatus.DERIVED, EpistemicStatus.DERIVED)
+
+    result = skeptic_result("skeptic", adjudicate(board))
+
+    assert result.status is AgentResultStatus.PARTIAL
+    assert result.next_actions
+
+
+def test_a_crashing_role_is_retried_then_failed_without_killing_the_analysis(
+    monkeypatch,
+) -> None:
+    """One broken producer must not cost every other role its claims."""
+
+    import logiclab.repository_analysis as ra
+
+    real = ra.execute_role
+    calls: list[str] = []
+
+    def flaky(role, task_id, index, report):
+        if role is AgentRole.TEST_HISTORY_ANALYST:
+            calls.append(task_id)
+            raise RuntimeError("analyzer exploded reading Bearer SUPERSECRETVALUE123")
+        return real(role, task_id, index, report)
+
+    monkeypatch.setattr(ra, "execute_role", flaky)
+
+    class _Snapshot:
+        tree_digest = "sha256:" + "d" * 64
+        blob_sha256 = BLOBS
+
+    analysis = ra.RepositoryAnalysis(
+        name="x", repository_url="https://github.com/acme/repo.git", commit="e" * 40
+    )
+    outcome = ra._run_agent_team(analysis, _Snapshot(), make_report())
+
+    failed = [item for item in outcome.tasks if item.agent == "test_history_analyst"]
+    assert failed and failed[0].status == "failed"
+    # Retried up to the budget rather than dead-ending on the first error.
+    assert len(calls) > 1
+    # Every other producing role still delivered.
+    assert outcome.claims
+    assert {item.status for item in outcome.tasks} != {"failed"}
+    # The crash message passes through the redactor before it is persisted.
+    assert all("SUPERSECRETVALUE123" not in (item.output or "") for item in outcome.tasks)
+    assert any("REDACTED" in (item.output or "") for item in outcome.tasks)
+
+
+class _Snapshot:
+    tree_digest = "sha256:" + "d" * 64
+    blob_sha256 = BLOBS
+
+
+def _team(monkeypatch=None, failing_role: AgentRole | None = None, proposer=None):
+    import logiclab.repository_analysis as ra
+
+    if failing_role is not None and monkeypatch is not None:
+        real = ra.execute_role
+
+        def flaky(role, task_id, index, report):
+            if role is failing_role:
+                raise RuntimeError("producer exploded")
+            return real(role, task_id, index, report)
+
+        monkeypatch.setattr(ra, "execute_role", flaky)
+
+    analysis = ra.RepositoryAnalysis(
+        name="x", repository_url="https://github.com/acme/repo.git", commit="e" * 40
+    )
+    return ra._run_agent_team(
+        analysis, _Snapshot(), make_report(with_endpoint=True), proposer=proposer
+    )
+
+
+def test_next_actions_reach_the_persisted_task_view() -> None:
+    """The observation only counts if it survives all the way to the report."""
+
+    outcome = _team()
+    by_agent = {item.agent: item for item in outcome.tasks}
+
+    scout = by_agent["build_runtime_scout"]
+    assert scout.status == "partial"
+    assert any("sandbox manifest" in item for item in scout.next_actions)
+
+    # A role that succeeded has nothing to unblock.
+    assert by_agent["repo_surveyor"].next_actions == []
+
+
+def test_a_blocked_task_names_the_upstream_that_stopped_it(monkeypatch) -> None:
+    outcome = _team(monkeypatch, failing_role=AgentRole.REPO_SURVEYOR)
+    by_id = {item.id: item for item in outcome.tasks}
+
+    assert by_id["survey"].status == "failed"
+    blocked = [item for item in outcome.tasks if item.status == "blocked"]
+    assert blocked, "a failed root should block its dependents"
+    for task in blocked:
+        assert task.output, f"{task.id} is blocked with no explanation"
+        assert task.next_actions, f"{task.id} is blocked with no next action"
+    # The direct dependent points at the real culprit by name.
+    assert "survey" in by_id["architecture"].output
+
+
+def test_enabling_the_proposer_does_not_strip_role_guidance() -> None:
+    """A model extension must not delete the deterministic role's own next steps."""
+
+    from logiclab.proposals import ProposalSet
+
+    class _Proposer:
+        def propose(self, role, index, report):
+            from logiclab.harness import BudgetUsage
+            from logiclab.proposals import ClaimProposer
+
+            class _Client:
+                @staticmethod
+                def structured_chat(model, system, user, response_model):
+                    return ProposalSet(proposals=[])
+
+            del BudgetUsage, ClaimProposer
+            return _real_proposer().propose(role, index, report)
+
+    def _real_proposer():
+        from logiclab.proposals import ClaimProposer, ProposedClaim
+
+        class _Client:
+            @staticmethod
+            def structured_chat(model, system, user, response_model):
+                return ProposalSet(
+                    proposals=[
+                        ProposedClaim(
+                            kind="behavior",
+                            subject="src/app.py",
+                            predicate="enforces",
+                            value="tenant isolation",
+                            path=SOURCE_PATH,
+                            start_line=1,
+                            end_line=2,
+                            rationale="checked before returning rows",
+                        )
+                    ]
+                )
+
+        return ClaimProposer(client=_Client(), model="m")
+
+    outcome = _team(proposer=_Proposer())
+    by_agent = {item.agent: item for item in outcome.tasks}
+
+    for role in ("security_domain_mapper", "twin_synthesizer"):
+        task = by_agent[role]
+        assert task.status == "partial"
+        assert task.next_actions, f"{role} lost its guidance once the proposer ran"

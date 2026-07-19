@@ -78,7 +78,14 @@ export function AgentTasksPage() {
                       <td><strong>{task.title}</strong><small className="cell-detail"><code>{task.id}</code></small></td>
                       <td>{task.agent}</td>
                       <td>{task.depends_on.length ? task.depends_on.join(", ") : "root"}</td>
-                      <td>{task.output ?? "—"}</td>
+                      <td>
+                        {task.output ?? "—"}
+                        {task.next_actions.length > 0 && (
+                          <small className="cell-detail">
+                            Next: {task.next_actions.join("; ")}
+                          </small>
+                        )}
+                      </td>
                       <td>{task.duration_ms ? `${(task.duration_ms / 1000).toFixed(1)}s` : "—"}</td>
                       <td><StatusPill status={task.status} /></td>
                     </tr>

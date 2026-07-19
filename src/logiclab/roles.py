@@ -375,6 +375,38 @@ _ROLE_MISSING: dict[AgentRole, str] = {
     AgentRole.TWIN_SYNTHESIZER: "no component had enough evidence to synthesize",
 }
 
+# An abstention that does not say what would unblock it is a dead end for the
+# operator. Every non-success outcome carries a concrete next step.
+_ABSTAIN_NEXT_ACTIONS: dict[AgentRole, tuple[str, ...]] = {
+    AgentRole.REPO_SURVEYOR: (
+        "check snapshot diagnostics for an omitted manifest",
+        "extend manifest discovery to this ecosystem",
+    ),
+    AgentRole.ARCHITECTURE_MAPPER: (
+        "add a language analyzer for this stack",
+        "check whether the source files were skipped as binary or oversized",
+    ),
+    AgentRole.SECURITY_DOMAIN_MAPPER: (
+        "add a framework adapter so routes are recognised",
+        "confirm the repository genuinely exposes no entry point",
+    ),
+    AgentRole.BUILD_RUNTIME_SCOUT: (
+        "check snapshot diagnostics for an omitted build manifest",
+    ),
+    AgentRole.TEST_HISTORY_ANALYST: (
+        "confirm the repository has no tests, or extend the path conventions",
+    ),
+    AgentRole.TWIN_SYNTHESIZER: (
+        "resolve the upstream mapper abstentions first",
+    ),
+}
+
+_PARTIAL_NEXT_ACTIONS: dict[AgentRole, tuple[str, ...]] = {
+    AgentRole.BUILD_RUNTIME_SCOUT: ("approve a sandbox manifest to raise runtime above R1",),
+    AgentRole.SECURITY_DOMAIN_MAPPER: ("add framework adapters to reach understanding U3",),
+    AgentRole.TWIN_SYNTHESIZER: ("reach understanding U4 to synthesize a verified twin",),
+}
+
 
 def _partial_reason(role: AgentRole, report: RepositoryIntelligenceReport) -> str | None:
     """Capability ceilings that make an otherwise successful role incomplete."""
@@ -434,6 +466,7 @@ def execute_role(
             status=AgentResultStatus.ABSTAIN,
             summary=f"{summary} — abstained: {_ROLE_MISSING[role]}",
             abstain_reason=AbstainReason.INSUFFICIENT_EVIDENCE,
+            next_actions=_ABSTAIN_NEXT_ACTIONS.get(role, ()),
         )
 
     partial = _partial_reason(role, report)
@@ -445,6 +478,7 @@ def execute_role(
             summary=summary,
             claims=tuple(claims),
             missing_information=(partial,),
+            next_actions=_PARTIAL_NEXT_ACTIONS.get(role, ()),
         )
     return AgentResult(
         task_id=task_id,
@@ -539,6 +573,10 @@ def skeptic_result(task_id: str, adjudication: Adjudication) -> AgentResult:
             conflict_ids=adjudication.unresolved_conflict_ids,
             missing_information=(
                 "evidence strength ties; conflicting claims remain disputed",
+            ),
+            next_actions=(
+                "supply a more strongly cited claim for each tied conflict",
+                "review the tied claims manually before trusting the twin",
             ),
         )
     return AgentResult(

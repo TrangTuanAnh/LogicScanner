@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     proposer_base_url: str = "http://127.0.0.1:11434"
     proposer_model: str = ""
     proposer_max_claims: int = Field(default=25, ge=1, le=500)
+    proposer_max_context_tokens: int = Field(default=12_000, ge=1, le=500_000)
     proposer_timeout_seconds: float = Field(default=120.0, gt=0, le=3_600)
     artifact_root: Path = Path(".logiclab/artifacts")
     workspace_root: Path = Path(".logiclab/workspaces")

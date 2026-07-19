@@ -8,6 +8,7 @@ from logiclab.proposals import (
     ProposedClaim,
     ProposerPolicy,
     build_proposer,
+    estimate_tokens,
 )
 from logiclab.roles import adjudicate, execute_role
 from tests.test_roles import SOURCE_PATH, make_index, make_report
@@ -363,3 +364,46 @@ def test_a_failing_model_degrades_a_complete_role_to_partial() -> None:
     assert result.status is AgentResultStatus.PARTIAL
     assert result.claims == baseline.claims
     assert any("unavailable" in note for note in notes)
+
+
+def test_context_budget_is_measured_against_the_real_payload() -> None:
+    """A declared budget that nothing measures cannot ever be exhausted."""
+
+    client = FakeClient(ProposalSet(proposals=[]))
+    proposer = ClaimProposer(client=client, model="test-model")
+
+    outcome = proposer.propose(AgentRole.SECURITY_DOMAIN_MAPPER, make_index(), make_report())
+
+    sent = client.calls[0]["user"]
+    assert outcome.usage.context_tokens == estimate_tokens(sent)
+    assert outcome.usage.context_tokens > 0
+
+
+def test_a_tight_context_budget_trims_the_evidence_list() -> None:
+    client = FakeClient(ProposalSet(proposals=[]))
+    proposer = ClaimProposer(
+        client=client,
+        model="test-model",
+        policy=ProposerPolicy(max_context_tokens=1),
+    )
+
+    outcome = proposer.propose(AgentRole.SECURITY_DOMAIN_MAPPER, make_index(), make_report())
+
+    sent_paths = client.calls[0]["user"]["allowed_paths"]
+    assert len(sent_paths) == 1
+    assert any("context budget trimmed" in item for item in outcome.rejected)
+
+
+def test_an_exhausted_context_budget_can_actually_trip_the_stop_rule() -> None:
+    from logiclab.harness import StopReason, StopRules, TaskBudget
+
+    client = FakeClient(ProposalSet(proposals=[]))
+    proposer = ClaimProposer(client=client, model="test-model")
+    outcome = proposer.propose(AgentRole.SECURITY_DOMAIN_MAPPER, make_index(), make_report())
+
+    assessment = StopRules.evaluate(
+        TaskBudget(max_context_tokens=outcome.usage.context_tokens), outcome.usage
+    )
+
+    assert assessment.stop is True
+    assert StopReason.CONTEXT_BUDGET_EXHAUSTED in assessment.reasons

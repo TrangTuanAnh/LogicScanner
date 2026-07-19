@@ -61,6 +61,13 @@ flowchart LR
   stays `UNRESOLVED` rather than being broken arbitrarily.
 - Budgets are enforced, not merely declared: `TaskDAG` accumulates `BudgetUsage`
   per task and applies `StopRules`, and role `max_parallelism` gates dispatch.
+- Every non-success outcome carries a next step. Abstentions, capability
+  ceilings, role crashes, and scheduler-blocked tasks all name what would
+  unblock them, and that reaches the report and the UI.
+- Recovery is closed: a role crash becomes a typed `ERROR` with a recovery
+  contract instead of killing the analysis, `TaskDAG.retry_task` returns it to
+  the ready pool, and `StopRules` fails it once the retry budget is spent. Every
+  other role still contributes its claims.
 - Claim identity is reproducible. `created_at` is excluded from the claim hash
   material, so the same commit yields the same `claim_id` in every run.
 

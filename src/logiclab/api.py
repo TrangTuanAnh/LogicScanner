@@ -67,7 +67,10 @@ def _build_proposer(settings: Settings):
         base_url=settings.proposer_base_url,
         model=settings.proposer_model,
         timeout_seconds=settings.proposer_timeout_seconds,
-        policy=ProposerPolicy(max_proposals=settings.proposer_max_claims),
+        policy=ProposerPolicy(
+            max_proposals=settings.proposer_max_claims,
+            max_context_tokens=settings.proposer_max_context_tokens,
+        ),
     )
 
 
